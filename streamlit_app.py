@@ -8,12 +8,17 @@ import os
 from datetime import datetime
 
 from pdf_parser import parse_crf_pdf, forms_to_summary_text
-from gap_analyzer import run_gap_analysis, run_portfolio_analysis
+from gap_analyzer import run_gap_analysis, run_portfolio_analysis, run_cdash_analysis
 from usage_limiter import get_usage_today, get_daily_limit, is_limit_reached, increment_usage
+from cdash_reference import list_available_domains, domains_to_reference_text, custom_reference_to_text, CDASH_VERSION_LABEL
 
 st.set_page_config(page_title="CRF Intelligence Analyzer", page_icon="\U0001F9EC", layout="wide")
 
 SEVERITY_ICONS = {"critical": "\U0001F534", "high": "\U0001F7E0", "moderate": "\U0001F7E1"}
+
+MODE_PAIRWISE = "Pairwise Comparison (2 documents)"
+MODE_PORTFOLIO = "Portfolio Scan (3+ documents)"
+MODE_CDASH = "CDASH Alignment Check"
 
 
 def get_api_key() -> str:
@@ -26,8 +31,9 @@ def render_header():
     st.title("\U0001F9EC CRF Intelligence Analyzer")
     st.markdown(
         "**Automated CRF gap analysis, powered by AI.** "
-        "Compare two CRFs, or scan a portfolio of three or more, and get a "
-        "structured, severity-ranked report in seconds."
+        "Compare two CRFs, scan a portfolio of three or more, or check a "
+        "single CRF against CDASH standards — get a structured, "
+        "severity-ranked report in seconds."
     )
     st.divider()
 
@@ -42,12 +48,22 @@ def render_sidebar(mode: str):
             - Protocol amendment impact review
             - Legacy study CRF reuse assessment
             - Cross-study harmonization checks
+            - CDASH standards alignment review
 
             Try it with real public oncology CRFs from NCI's
             Human Cancer Models Initiative (HCMI) — Lung Cancer
             Enrollment vs Follow-Up forms are preloaded as an example.
             """
         )
+        if mode == MODE_CDASH:
+            st.divider()
+            st.caption(f"CDASH reference: {CDASH_VERSION_LABEL}")
+            st.caption(
+                "This reference is reconstructed from publicly available CDISC "
+                "documentation, not the official gated CDASHIG Metadata Table. "
+                "Treat findings as directional, not a substitute for verification "
+                "against a licensed copy of the official standard."
+            )
         st.divider()
         used = get_usage_today()
         limit = get_daily_limit()
@@ -115,6 +131,39 @@ def render_portfolio_findings(report: dict):
             st.markdown(f"**Why it matters:** {finding.get('clinical_rationale', '')}")
 
 
+def render_cdash_findings(report: dict):
+    summary = report.get("summary", {})
+    findings = report.get("findings", [])
+
+    domains_checked = ", ".join(summary.get("domains_checked", []) or ["-"])
+    st.caption(f"Domains checked: {domains_checked}")
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total Findings", summary.get("total_findings", len(findings)))
+    col2.metric("\U0001F534 Critical", summary.get("critical_count", 0))
+    col3.metric("\U0001F7E0 High", summary.get("high_count", 0))
+    col4.metric("\U0001F7E1 Moderate", summary.get("moderate_count", 0))
+    st.divider()
+
+    severity_order = {"critical": 0, "high": 1, "moderate": 2}
+    sorted_findings = sorted(findings, key=lambda f: severity_order.get(f.get("severity", "moderate"), 3))
+
+    selected_filter = st.radio("Filter by severity:", ["All", "Critical", "High", "Moderate"], horizontal=True, key="cdash_filter")
+
+    for finding in sorted_findings:
+        sev = finding.get("severity", "moderate")
+        if selected_filter != "All" and sev != selected_filter.lower():
+            continue
+        with st.container(border=True):
+            icon = SEVERITY_ICONS.get(sev, "\u26AA")
+            domain = finding.get("domain", "-")
+            variable = finding.get("cdash_variable", "N/A")
+            st.markdown(f"{icon} **{sev.upper()}** &mdash; **{domain}** / `{variable}`")
+            st.markdown(f"**Type:** {finding.get('finding_type', 'other').replace('_', ' ').title()}")
+            st.markdown(f"**Finding:** {finding.get('description', '')}")
+            st.markdown(f"**Why it matters:** {finding.get('clinical_rationale', '')}")
+
+
 def pairwise_report_to_markdown(report: dict, doc_a_name: str, doc_b_name: str) -> str:
     summary = report.get("summary", {})
     findings = report.get("findings", [])
@@ -173,6 +222,34 @@ def portfolio_report_to_markdown(report: dict, doc_names: list) -> str:
     return "\n".join(lines)
 
 
+def cdash_report_to_markdown(report: dict, doc_name: str, domains: list) -> str:
+    summary = report.get("summary", {})
+    findings = report.get("findings", [])
+    lines = [
+        "# CDASH Alignment Report", "",
+        f"**Document:** {doc_name}  ",
+        f"**CDASH domains checked:** {', '.join(domains)}  ",
+        f"**Reference:** {CDASH_VERSION_LABEL}  ",
+        f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M')}  ", "",
+        "## Summary", "",
+        f"- Total findings: {summary.get('total_findings', len(findings))}",
+        f"- Critical: {summary.get('critical_count', 0)}",
+        f"- High: {summary.get('high_count', 0)}",
+        f"- Moderate: {summary.get('moderate_count', 0)}", "",
+        "## Findings", "",
+    ]
+    severity_order = {"critical": 0, "high": 1, "moderate": 2}
+    sorted_findings = sorted(findings, key=lambda f: severity_order.get(f.get("severity", "moderate"), 3))
+    for i, f in enumerate(sorted_findings, 1):
+        lines += [
+            f"### {i}. [{f.get('severity', 'moderate').upper()}] {f.get('domain', '-')} / {f.get('cdash_variable', 'N/A')}", "",
+            f"**Type:** {f.get('finding_type', 'other').replace('_', ' ').title()}", "",
+            f"**Finding:** {f.get('description', '')}", "",
+            f"**Why it matters:** {f.get('clinical_rationale', '')}", "", "---", "",
+        ]
+    return "\n".join(lines)
+
+
 def parse_uploaded_pdf(uploaded_file):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         tmp.write(uploaded_file.read())
@@ -188,12 +265,7 @@ def parse_uploaded_pdf(uploaded_file):
 def main():
     render_header()
 
-    mode = st.radio(
-        "Analysis mode:",
-        ["Pairwise Comparison (2 documents)", "Portfolio Scan (3+ documents)"],
-        horizontal=True,
-    )
-    is_portfolio = mode.startswith("Portfolio")
+    mode = st.radio("Analysis mode:", [MODE_PAIRWISE, MODE_PORTFOLIO, MODE_CDASH], horizontal=True)
 
     render_sidebar(mode)
 
@@ -210,8 +282,7 @@ def main():
             "See the GitHub repo linked in the sidebar for instructions."
         )
 
-    if not is_portfolio:
-        # ---------- PAIRWISE MODE ----------
+    if mode == MODE_PAIRWISE:
         col_a, col_b = st.columns(2)
         with col_a:
             st.subheader("Document A")
@@ -263,8 +334,7 @@ def main():
             with st.expander("View raw JSON output"):
                 st.json(st.session_state["last_report"])
 
-    else:
-        # ---------- PORTFOLIO MODE ----------
+    elif mode == MODE_PORTFOLIO:
         st.subheader("Upload 3 or more CRF documents")
         uploaded_files = st.file_uploader(
             "Upload CRF PDFs (legacy studies, protocol versions, vendor builds, etc.)",
@@ -318,6 +388,108 @@ def main():
             st.download_button(
                 "\U0001F4E5 Download Report (Markdown)", data=md_report,
                 file_name=f"crf_portfolio_report_{datetime.now().strftime('%Y%m%d_%H%M')}.md", mime="text/markdown",
+            )
+            with st.expander("View raw JSON output"):
+                st.json(st.session_state["last_report"])
+
+    else:  # MODE_CDASH
+        st.subheader("Upload one CRF document to check against CDASH")
+        file_c = st.file_uploader("Upload CRF PDF", type=["pdf"], key="file_cdash")
+
+        st.divider()
+        st.markdown("**CDASH reference source**")
+        ref_source = st.radio(
+            "Which CDASH reference should be used?",
+            [
+                "Use bundled reference domains (AE, CM, VS, DM, RS, LB)",
+                "Upload my own CDASH reference (e.g., a specific version, or official CDASHIG extract)",
+            ],
+            key="cdash_ref_source",
+        )
+        use_custom_ref = ref_source.startswith("Upload")
+
+        selected_codes = []
+        custom_ref_file = None
+        custom_ref_text = None
+
+        if not use_custom_ref:
+            available = list_available_domains()
+            domain_labels = [f"{code} — {name}" for code, name in available]
+            selected_labels = st.multiselect(
+                "CDASH domains to check against:",
+                domain_labels,
+                default=domain_labels[:2] if len(domain_labels) >= 2 else domain_labels,
+            )
+            selected_codes = [label.split(" — ")[0] for label in selected_labels]
+            st.caption(
+                "Reference source: publicly-sourced CDASH reconstruction (see sidebar for details). "
+                "CDASH revises periodically — if you have a specific version you need to check "
+                "against, use the upload option above instead."
+            )
+        else:
+            custom_ref_file = st.file_uploader(
+                "Upload your CDASH reference (PDF or .txt — e.g., a CDASHIG Metadata Table export, "
+                "an internal standards document, or a specific version extract)",
+                type=["pdf", "txt"],
+                key="cdash_custom_ref",
+            )
+            if custom_ref_file:
+                st.caption(f"Using uploaded reference: {custom_ref_file.name}")
+
+        ready_to_run = file_c and (
+            (not use_custom_ref and selected_codes) or (use_custom_ref and custom_ref_file)
+        )
+
+        run_button = st.button(
+            "\U0001F50D Run CDASH Check",
+            type="primary",
+            disabled=not ready_to_run or limit_reached,
+        )
+
+        if run_button and ready_to_run and not is_limit_reached():
+            with st.spinner("Parsing CRF document..."):
+                forms_c, content_c = parse_uploaded_pdf(file_c)
+
+            st.success(f"Parsed {len(forms_c)} form section(s).")
+
+            if use_custom_ref:
+                with st.spinner("Reading uploaded CDASH reference..."):
+                    if custom_ref_file.name.lower().endswith(".pdf"):
+                        _, ref_raw_text = parse_uploaded_pdf(custom_ref_file)
+                    else:
+                        ref_raw_text = custom_ref_file.read().decode("utf-8", errors="ignore")
+                    ref_text = custom_reference_to_text(ref_raw_text, source_label=custom_ref_file.name)
+                domains_used = [f"custom: {custom_ref_file.name}"]
+            else:
+                ref_text = domains_to_reference_text(selected_codes)
+                domains_used = selected_codes
+
+            with st.spinner("Checking against CDASH reference..."):
+                try:
+                    report = run_cdash_analysis(file_c.name, content_c, ref_text, api_key)
+                    increment_usage()
+                except Exception as e:
+                    st.error(f"Analysis failed: {e}")
+                    st.stop()
+
+            st.session_state["last_report"] = report
+            st.session_state["last_mode"] = "cdash"
+            st.session_state["last_doc_c_name"] = file_c.name
+            st.session_state["last_cdash_domains"] = domains_used
+
+        if "last_report" in st.session_state and st.session_state.get("last_mode") == "cdash":
+            st.divider()
+            st.header("\U0001F4CB CDASH Alignment Results")
+            render_cdash_findings(st.session_state["last_report"])
+            st.divider()
+            md_report = cdash_report_to_markdown(
+                st.session_state["last_report"],
+                st.session_state["last_doc_c_name"],
+                st.session_state["last_cdash_domains"],
+            )
+            st.download_button(
+                "\U0001F4E5 Download Report (Markdown)", data=md_report,
+                file_name=f"crf_cdash_report_{datetime.now().strftime('%Y%m%d_%H%M')}.md", mime="text/markdown",
             )
             with st.expander("View raw JSON output"):
                 st.json(st.session_state["last_report"])

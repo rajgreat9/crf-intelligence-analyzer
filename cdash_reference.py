@@ -169,3 +169,21 @@ def domains_to_reference_text(domain_codes: list) -> str:
             lines.append(f"  - [{f['variable']}] {f['label']} ({core_tag}): {f['note']}")
         lines.append("")
     return "\n".join(lines)
+
+
+def custom_reference_to_text(raw_text: str, source_label: str = "User-uploaded CDASH reference") -> str:
+    """
+    Wraps a user-supplied CDASH reference (extracted text from their own
+    CDASHIG PDF, Excel export, or other version-specific document) into
+    the same kind of reference text block the LLM expects — without
+    forcing it through our structured field format. This lets a user
+    check against whatever CDASH version they actually have access to
+    (e.g., a newer release than our bundled reconstruction), since CDASH
+    itself revises periodically and our bundled data is necessarily a
+    point-in-time, publicly-sourced approximation.
+    """
+    truncated = raw_text[:40000]  # keep prompt size reasonable
+    note = ""
+    if len(raw_text) > 40000:
+        note = "\n[NOTE: reference text truncated to first 40,000 characters for length.]"
+    return f"CDASH REFERENCE (source: {source_label})\n\n{truncated}{note}"
