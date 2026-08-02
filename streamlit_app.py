@@ -8,7 +8,7 @@ import os
 from datetime import datetime
 
 from pdf_parser import parse_crf_pdf, forms_to_summary_text
-from gap_analyzer import run_gap_analysis
+from gap_analyzer import run_gap_analysis, run_portfolio_analysis
 from usage_limiter import get_usage_today, get_daily_limit, is_limit_reached, increment_usage
 
 st.set_page_config(page_title="CRF Intelligence Analyzer", page_icon="\U0001F9EC", layout="wide")
@@ -25,13 +25,14 @@ def get_api_key() -> str:
 def render_header():
     st.title("\U0001F9EC CRF Intelligence Analyzer")
     st.markdown(
-        "**Automated protocol-to-CRF gap analysis, powered by AI.** "
-        "Upload two CRF PDFs and get a structured, severity-ranked gap report in seconds."
+        "**Automated CRF gap analysis, powered by AI.** "
+        "Compare two CRFs, or scan a portfolio of three or more, and get a "
+        "structured, severity-ranked report in seconds."
     )
     st.divider()
 
 
-def render_sidebar():
+def render_sidebar(mode: str):
     with st.sidebar:
         st.header("About")
         st.markdown(
@@ -57,7 +58,7 @@ def render_sidebar():
         )
 
 
-def render_findings(report: dict):
+def render_pairwise_findings(report: dict):
     summary = report.get("summary", {})
     findings = report.get("findings", [])
 
@@ -71,7 +72,7 @@ def render_findings(report: dict):
     severity_order = {"critical": 0, "high": 1, "moderate": 2}
     sorted_findings = sorted(findings, key=lambda f: severity_order.get(f.get("severity", "moderate"), 3))
 
-    selected_filter = st.radio("Filter by severity:", ["All", "Critical", "High", "Moderate"], horizontal=True)
+    selected_filter = st.radio("Filter by severity:", ["All", "Critical", "High", "Moderate"], horizontal=True, key="pairwise_filter")
 
     for finding in sorted_findings:
         sev = finding.get("severity", "moderate")
@@ -83,10 +84,38 @@ def render_findings(report: dict):
             st.markdown(f"**Type:** {finding.get('finding_type', 'other').replace('_', ' ').title()}")
             st.markdown(f"**What changed:** {finding.get('description', '')}")
             st.markdown(f"**Why it matters:** {finding.get('clinical_rationale', '')}")
-            st.markdown(f"**Recommended action:** {finding.get('recommendation', '')}")
 
 
-def report_to_markdown(report: dict, doc_a_name: str, doc_b_name: str) -> str:
+def render_portfolio_findings(report: dict):
+    summary = report.get("summary", {})
+    findings = report.get("findings", [])
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Documents Reviewed", summary.get("documents_reviewed", "-"))
+    col2.metric("\U0001F534 Critical", summary.get("critical_count", 0))
+    col3.metric("\U0001F7E0 High", summary.get("high_count", 0))
+    col4.metric("\U0001F7E1 Moderate", summary.get("moderate_count", 0))
+    st.divider()
+
+    severity_order = {"critical": 0, "high": 1, "moderate": 2}
+    sorted_findings = sorted(findings, key=lambda f: severity_order.get(f.get("severity", "moderate"), 3))
+
+    selected_filter = st.radio("Filter by severity:", ["All", "Critical", "High", "Moderate"], horizontal=True, key="portfolio_filter")
+
+    for finding in sorted_findings:
+        sev = finding.get("severity", "moderate")
+        if selected_filter != "All" and sev != selected_filter.lower():
+            continue
+        with st.container(border=True):
+            icon = SEVERITY_ICONS.get(sev, "\u26AA")
+            docs = ", ".join(finding.get("documents_involved", []) or ["(unspecified)"])
+            st.markdown(f"{icon} **{sev.upper()}** &mdash; **{finding.get('finding_type', 'other').replace('_', ' ').title()}**")
+            st.markdown(f"**Documents involved:** {docs}")
+            st.markdown(f"**Pattern found:** {finding.get('description', '')}")
+            st.markdown(f"**Why it matters:** {finding.get('clinical_rationale', '')}")
+
+
+def pairwise_report_to_markdown(report: dict, doc_a_name: str, doc_b_name: str) -> str:
     summary = report.get("summary", {})
     findings = report.get("findings", [])
     lines = [
@@ -108,15 +137,65 @@ def report_to_markdown(report: dict, doc_a_name: str, doc_b_name: str) -> str:
             f"### {i}. [{f.get('severity', 'moderate').upper()}] {f.get('form_name', 'Unknown Form')}", "",
             f"**Type:** {f.get('finding_type', 'other').replace('_', ' ').title()}", "",
             f"**What changed:** {f.get('description', '')}", "",
-            f"**Why it matters:** {f.get('clinical_rationale', '')}", "",
-            f"**Recommended action:** {f.get('recommendation', '')}", "", "---", "",
+            f"**Why it matters:** {f.get('clinical_rationale', '')}", "", "---", "",
         ]
     return "\n".join(lines)
 
 
+def portfolio_report_to_markdown(report: dict, doc_names: list) -> str:
+    summary = report.get("summary", {})
+    findings = report.get("findings", [])
+    lines = [
+        "# CRF Portfolio Analysis Report", "",
+        f"**Documents reviewed ({len(doc_names)}):**",
+    ]
+    for name in doc_names:
+        lines.append(f"- {name}")
+    lines += [
+        "", f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M')}  ", "",
+        "## Summary", "",
+        f"- Documents reviewed: {summary.get('documents_reviewed', len(doc_names))}",
+        f"- Critical: {summary.get('critical_count', 0)}",
+        f"- High: {summary.get('high_count', 0)}",
+        f"- Moderate: {summary.get('moderate_count', 0)}", "",
+        "## Findings", "",
+    ]
+    severity_order = {"critical": 0, "high": 1, "moderate": 2}
+    sorted_findings = sorted(findings, key=lambda f: severity_order.get(f.get("severity", "moderate"), 3))
+    for i, f in enumerate(sorted_findings, 1):
+        docs = ", ".join(f.get("documents_involved", []) or ["(unspecified)"])
+        lines += [
+            f"### {i}. [{f.get('severity', 'moderate').upper()}] {f.get('finding_type', 'other').replace('_', ' ').title()}", "",
+            f"**Documents involved:** {docs}", "",
+            f"**Pattern found:** {f.get('description', '')}", "",
+            f"**Why it matters:** {f.get('clinical_rationale', '')}", "", "---", "",
+        ]
+    return "\n".join(lines)
+
+
+def parse_uploaded_pdf(uploaded_file):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(uploaded_file.read())
+        path = tmp.name
+    try:
+        forms = parse_crf_pdf(path)
+        content = forms_to_summary_text(forms)
+    finally:
+        os.unlink(path)
+    return forms, content
+
+
 def main():
     render_header()
-    render_sidebar()
+
+    mode = st.radio(
+        "Analysis mode:",
+        ["Pairwise Comparison (2 documents)", "Portfolio Scan (3+ documents)"],
+        horizontal=True,
+    )
+    is_portfolio = mode.startswith("Portfolio")
+
+    render_sidebar(mode)
 
     api_key = get_api_key()
     if not api_key:
@@ -131,67 +210,117 @@ def main():
             "See the GitHub repo linked in the sidebar for instructions."
         )
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.subheader("Document A")
-        file_a = st.file_uploader("Upload CRF PDF", type=["pdf"], key="file_a")
-    with col_b:
-        st.subheader("Document B")
-        file_b = st.file_uploader("Upload CRF PDF", type=["pdf"], key="file_b")
+    if not is_portfolio:
+        # ---------- PAIRWISE MODE ----------
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.subheader("Document A")
+            file_a = st.file_uploader("Upload CRF PDF", type=["pdf"], key="file_a")
+        with col_b:
+            st.subheader("Document B")
+            file_b = st.file_uploader("Upload CRF PDF", type=["pdf"], key="file_b")
 
-    run_button = st.button(
-        "\U0001F50D Run Gap Analysis",
-        type="primary",
-        disabled=not (file_a and file_b) or limit_reached,
-    )
-
-    if run_button and file_a and file_b and not is_limit_reached():
-        with st.spinner("Parsing CRF documents..."):
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_a:
-                tmp_a.write(file_a.read())
-                path_a = tmp_a.name
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_b:
-                tmp_b.write(file_b.read())
-                path_b = tmp_b.name
-            try:
-                forms_a = parse_crf_pdf(path_a)
-                forms_b = parse_crf_pdf(path_b)
-                content_a = forms_to_summary_text(forms_a)
-                content_b = forms_to_summary_text(forms_b)
-            finally:
-                os.unlink(path_a)
-                os.unlink(path_b)
-
-        st.success(f"Parsed {len(forms_a)} form section(s) from A, {len(forms_b)} from B.")
-
-        with st.spinner("Running AI-powered gap analysis..."):
-            try:
-                report = run_gap_analysis(file_a.name, content_a, file_b.name, content_b, api_key)
-                increment_usage()
-            except Exception as e:
-                st.error(f"Analysis failed: {e}")
-                st.stop()
-
-        st.session_state["last_report"] = report
-        st.session_state["last_doc_a_name"] = file_a.name
-        st.session_state["last_doc_b_name"] = file_b.name
-
-    if "last_report" in st.session_state:
-        st.divider()
-        st.header("\U0001F4CB Gap Analysis Results")
-        render_findings(st.session_state["last_report"])
-        st.divider()
-        md_report = report_to_markdown(
-            st.session_state["last_report"],
-            st.session_state["last_doc_a_name"],
-            st.session_state["last_doc_b_name"],
+        run_button = st.button(
+            "\U0001F50D Run Gap Analysis",
+            type="primary",
+            disabled=not (file_a and file_b) or limit_reached,
         )
-        st.download_button(
-            "\U0001F4E5 Download Report (Markdown)", data=md_report,
-            file_name=f"crf_gap_report_{datetime.now().strftime('%Y%m%d_%H%M')}.md", mime="text/markdown",
+
+        if run_button and file_a and file_b and not is_limit_reached():
+            with st.spinner("Parsing CRF documents..."):
+                forms_a, content_a = parse_uploaded_pdf(file_a)
+                forms_b, content_b = parse_uploaded_pdf(file_b)
+
+            st.success(f"Parsed {len(forms_a)} form section(s) from A, {len(forms_b)} from B.")
+
+            with st.spinner("Running AI-powered gap analysis..."):
+                try:
+                    report = run_gap_analysis(file_a.name, content_a, file_b.name, content_b, api_key)
+                    increment_usage()
+                except Exception as e:
+                    st.error(f"Analysis failed: {e}")
+                    st.stop()
+
+            st.session_state["last_report"] = report
+            st.session_state["last_mode"] = "pairwise"
+            st.session_state["last_doc_a_name"] = file_a.name
+            st.session_state["last_doc_b_name"] = file_b.name
+
+        if "last_report" in st.session_state and st.session_state.get("last_mode") == "pairwise":
+            st.divider()
+            st.header("\U0001F4CB Gap Analysis Results")
+            render_pairwise_findings(st.session_state["last_report"])
+            st.divider()
+            md_report = pairwise_report_to_markdown(
+                st.session_state["last_report"],
+                st.session_state["last_doc_a_name"],
+                st.session_state["last_doc_b_name"],
+            )
+            st.download_button(
+                "\U0001F4E5 Download Report (Markdown)", data=md_report,
+                file_name=f"crf_gap_report_{datetime.now().strftime('%Y%m%d_%H%M')}.md", mime="text/markdown",
+            )
+            with st.expander("View raw JSON output"):
+                st.json(st.session_state["last_report"])
+
+    else:
+        # ---------- PORTFOLIO MODE ----------
+        st.subheader("Upload 3 or more CRF documents")
+        uploaded_files = st.file_uploader(
+            "Upload CRF PDFs (legacy studies, protocol versions, vendor builds, etc.)",
+            type=["pdf"],
+            accept_multiple_files=True,
+            key="portfolio_files",
         )
-        with st.expander("View raw JSON output"):
-            st.json(st.session_state["last_report"])
+
+        num_files = len(uploaded_files) if uploaded_files else 0
+        if uploaded_files:
+            st.caption(f"{num_files} file(s) selected.")
+
+        run_button = st.button(
+            "\U0001F50D Run Portfolio Scan",
+            type="primary",
+            disabled=num_files < 3 or limit_reached,
+        )
+        if 0 < num_files < 3:
+            st.info("Portfolio mode requires at least 3 documents. Use Pairwise Comparison for 2.")
+
+        if run_button and num_files >= 3 and not is_limit_reached():
+            documents = []
+            with st.spinner(f"Parsing {num_files} CRF documents..."):
+                for f in uploaded_files:
+                    forms, content = parse_uploaded_pdf(f)
+                    documents.append((f.name, content))
+
+            st.success(f"Parsed {num_files} documents.")
+
+            with st.spinner("Running AI-powered portfolio analysis..."):
+                try:
+                    report = run_portfolio_analysis(documents, api_key)
+                    increment_usage()
+                except Exception as e:
+                    st.error(f"Analysis failed: {e}")
+                    st.stop()
+
+            st.session_state["last_report"] = report
+            st.session_state["last_mode"] = "portfolio"
+            st.session_state["last_doc_names"] = [name for name, _ in documents]
+
+        if "last_report" in st.session_state and st.session_state.get("last_mode") == "portfolio":
+            st.divider()
+            st.header("\U0001F4CB Portfolio Analysis Results")
+            render_portfolio_findings(st.session_state["last_report"])
+            st.divider()
+            md_report = portfolio_report_to_markdown(
+                st.session_state["last_report"],
+                st.session_state["last_doc_names"],
+            )
+            st.download_button(
+                "\U0001F4E5 Download Report (Markdown)", data=md_report,
+                file_name=f"crf_portfolio_report_{datetime.now().strftime('%Y%m%d_%H%M')}.md", mime="text/markdown",
+            )
+            with st.expander("View raw JSON output"):
+                st.json(st.session_state["last_report"])
 
 
 if __name__ == "__main__":
