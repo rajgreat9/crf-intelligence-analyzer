@@ -86,6 +86,47 @@ Respond ONLY with valid JSON, no preamble, no markdown fences:
 # Kept for backward compatibility with any code still importing the old name
 SYSTEM_PROMPT = PAIRWISE_SYSTEM_PROMPT
 
+CDASH_SYSTEM_PROMPT = """You are a clinical data management expert with deep, specific expertise in CDISC CDASH (Clinical Data Acquisition Standards Harmonization) standards, evaluating a single CRF document for alignment with CDASH.
+
+Your task is to assess how well the uploaded CRF aligns with the CDASH reference domain(s) provided below, the way an experienced CDASH implementation reviewer would during a CRF design review or standards compliance check.
+
+For each CDASH reference field, determine whether the CRF:
+- Has a clearly corresponding field (aligned)
+- Has a field that may correspond but uses different terminology or structure (partial/ambiguous alignment — flag for review)
+- Is missing the field entirely (gap)
+
+Also flag any CRF fields that don't map to any CDASH reference field — these aren't necessarily wrong (some fields are legitimately study-specific), but are worth noting for completeness.
+
+For each finding, classify severity as:
+- CRITICAL: Missing a CORE CDASH field that has direct downstream impact on SDTM mapping, safety reporting, or regulatory submission-required domains.
+- HIGH: Missing a core field with lower direct regulatory impact, or a significant terminology/structure mismatch likely to complicate SDTM mapping.
+- MODERATE: Missing a supplemental (non-core) CDASH field, or a minor terminology variation.
+
+Be precise and avoid false positives — if a CRF field plausibly corresponds to a CDASH field even with different wording, treat it as aligned rather than flagging a gap.
+
+Respond ONLY with valid JSON, no preamble, no markdown fences:
+
+{
+  "summary": {
+    "domains_checked": ["<domain codes checked, e.g. AE, CM>"],
+    "total_findings": <int>,
+    "critical_count": <int>,
+    "high_count": <int>,
+    "moderate_count": <int>
+  },
+  "findings": [
+    {
+      "severity": "critical|high|moderate",
+      "domain": "<CDASH domain code, e.g. AE>",
+      "cdash_variable": "<CDASH variable name this finding relates to, or 'N/A' if not applicable>",
+      "finding_type": "missing_core_field|missing_supplemental_field|terminology_mismatch|unmapped_crf_field|other",
+      "description": "<what was found or not found>",
+      "clinical_rationale": "<why this matters for CDASH alignment and downstream standards compliance>"
+    }
+  ]
+}
+"""
+
 
 def build_user_prompt(doc_a_name: str, doc_a_content: str, doc_b_name: str, doc_b_content: str) -> str:
     return f"""Compare the following two CRF documents and produce a gap analysis.
@@ -113,6 +154,21 @@ def build_portfolio_prompt(documents: list) -> str:
         sections.append("---")
     sections.append("\nProduce the structured JSON portfolio analysis as instructed.")
     return "\n".join(sections)
+
+
+def build_cdash_prompt(doc_name: str, doc_content: str, cdash_reference_text: str) -> str:
+    return f"""Assess the following CRF document for alignment with the CDASH reference domains provided below.
+
+CRF DOCUMENT: {doc_name}
+{doc_content}
+
+---
+
+{cdash_reference_text}
+
+---
+
+Produce the structured JSON CDASH alignment report as instructed."""
 
 
 def _call_claude(system_prompt: str, user_prompt: str, api_key: str) -> dict:
@@ -153,3 +209,11 @@ def run_portfolio_analysis(documents: list, api_key: str) -> dict:
         raise ValueError("Portfolio analysis requires at least 3 documents. Use run_gap_analysis for 2 documents.")
     user_prompt = build_portfolio_prompt(documents)
     return _call_claude(PORTFOLIO_SYSTEM_PROMPT, user_prompt, api_key)
+
+
+def run_cdash_analysis(doc_name: str, doc_content: str, cdash_reference_text: str, api_key: str) -> dict:
+    """
+    Checks a single CRF document against selected CDASH reference domain(s).
+    """
+    user_prompt = build_cdash_prompt(doc_name, doc_content, cdash_reference_text)
+    return _call_claude(CDASH_SYSTEM_PROMPT, user_prompt, api_key)
