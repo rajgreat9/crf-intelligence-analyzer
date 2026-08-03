@@ -39,18 +39,6 @@ def inject_custom_css():
             gap: 0.6rem;
             margin-bottom: 0.15rem;
         }
-        .cia-hero-mark {
-            font-family: 'IBM Plex Mono', monospace;
-            font-size: 0.75rem;
-            font-weight: 500;
-            letter-spacing: 0.08em;
-            color: #B45309;
-            background: #FDF3E7;
-            border: 1px solid #F3D9B4;
-            border-radius: 4px;
-            padding: 0.15rem 0.5rem;
-            text-transform: uppercase;
-        }
         .cia-hero-author {
             font-family: 'Inter', sans-serif;
             font-size: 0.85rem;
@@ -101,9 +89,17 @@ def inject_custom_css():
             font-weight: 700;
         }
 
-        /* Radio pills for mode selection */
+        /* Radio pills for mode selection — bold and bigger for easy scanning */
         div[role="radiogroup"] label {
             font-family: 'Inter', sans-serif;
+            font-size: 1.02rem;
+            font-weight: 600;
+            color: #1F2937;
+            padding: 0.3rem 0.2rem;
+        }
+        div[role="radiogroup"] label span {
+            font-weight: 600 !important;
+            font-size: 1.02rem !important;
         }
 
         /* Buttons */
@@ -144,12 +140,11 @@ def render_header():
     st.markdown(
         """
         <div class="cia-hero">
-            <span class="cia-hero-mark">WUSS 2026</span>
             <span class="cia-hero-author">Built by Raj Sharma</span>
         </div>
         <div class="cia-title">CRF Intelligence Analyzer</div>
         <div class="cia-subtitle">
-            Automated CRF gap analysis, powered by AI. Compare two CRFs, scan a
+            Automated CRF gap analysis. Compare two CRFs, scan a
             portfolio of three or more, check alignment against the official
             CDASHIG v2.3 standard, or verify a CRF against its source protocol —
             get a structured, severity-ranked report in seconds instead of days.
