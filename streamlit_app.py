@@ -22,6 +22,118 @@ MODE_CDASH = "CDASH Alignment Check"
 MODE_PROTOCOL = "Protocol Alignment Check"
 
 
+def inject_custom_css():
+    st.markdown(
+        """
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap');
+
+        html, body, [class*="css"] {
+            font-family: 'Inter', -apple-system, sans-serif;
+        }
+
+        /* Header */
+        .cia-hero {
+            display: flex;
+            align-items: baseline;
+            gap: 0.6rem;
+            margin-bottom: 0.15rem;
+        }
+        .cia-hero-mark {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.75rem;
+            font-weight: 500;
+            letter-spacing: 0.08em;
+            color: #B45309;
+            background: #FDF3E7;
+            border: 1px solid #F3D9B4;
+            border-radius: 4px;
+            padding: 0.15rem 0.5rem;
+            text-transform: uppercase;
+        }
+        .cia-hero-author {
+            font-family: 'Inter', sans-serif;
+            font-size: 0.85rem;
+            color: #6B7280;
+            font-weight: 500;
+        }
+        .cia-title {
+            font-family: 'Source Serif 4', Georgia, serif;
+            font-weight: 700;
+            font-size: 2.1rem;
+            color: #1B4B4F;
+            letter-spacing: -0.01em;
+        }
+        .cia-subtitle {
+            font-size: 1rem;
+            color: #4B5563;
+            max-width: 62ch;
+            line-height: 1.55;
+            margin-top: 0.35rem;
+        }
+
+        /* Section dividers use a hairline rather than default streamlit divider */
+        .cia-rule {
+            border: none;
+            border-top: 1px solid #E2DFD5;
+            margin: 1.1rem 0 1.3rem 0;
+        }
+
+        /* Cards for findings — subtle depth, no harsh shadow */
+        div[data-testid="stVerticalBlockBorderWrapper"] {
+            border-radius: 10px !important;
+            border-color: #E2DFD5 !important;
+            transition: border-color 0.15s ease;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:hover {
+            border-color: #C9C4B4 !important;
+        }
+
+        /* Metric cards */
+        div[data-testid="stMetric"] {
+            background: #FFFFFF;
+            border: 1px solid #E2DFD5;
+            border-radius: 8px;
+            padding: 0.75rem 0.9rem;
+        }
+        div[data-testid="stMetricValue"] {
+            font-family: 'Source Serif 4', Georgia, serif;
+            font-weight: 700;
+        }
+
+        /* Radio pills for mode selection */
+        div[role="radiogroup"] label {
+            font-family: 'Inter', sans-serif;
+        }
+
+        /* Buttons */
+        button[kind="primary"] {
+            font-weight: 600;
+            letter-spacing: 0.01em;
+        }
+
+        /* Sidebar polish */
+        section[data-testid="stSidebar"] {
+            background-color: #F5F3EC;
+            border-right: 1px solid #E2DFD5;
+        }
+        section[data-testid="stSidebar"] h3 {
+            font-family: 'Source Serif 4', Georgia, serif;
+            color: #1B4B4F;
+        }
+
+        /* Monospace treatment for CDASH variable codes and file names in captions */
+        code {
+            font-family: 'IBM Plex Mono', monospace;
+            background: #F0EEE5;
+            color: #1B4B4F;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def get_api_key() -> str:
     if "ANTHROPIC_API_KEY" in st.secrets:
         return st.secrets["ANTHROPIC_API_KEY"]
@@ -29,32 +141,54 @@ def get_api_key() -> str:
 
 
 def render_header():
-    st.title("\U0001F9EC CRF Intelligence Analyzer")
     st.markdown(
-        "**Automated CRF gap analysis, powered by AI.** "
-        "Compare two CRFs, scan a portfolio of three or more, or check a "
-        "single CRF against CDASH standards — get a structured, "
-        "severity-ranked report in seconds."
+        """
+        <div class="cia-hero">
+            <span class="cia-hero-mark">WUSS 2026</span>
+            <span class="cia-hero-author">Built by Raj Sharma</span>
+        </div>
+        <div class="cia-title">CRF Intelligence Analyzer</div>
+        <div class="cia-subtitle">
+            Automated CRF gap analysis, powered by AI. Compare two CRFs, scan a
+            portfolio of three or more, check alignment against the official
+            CDASHIG v2.3 standard, or verify a CRF against its source protocol —
+            get a structured, severity-ranked report in seconds instead of days.
+        </div>
+        <hr class="cia-rule" />
+        """,
+        unsafe_allow_html=True,
     )
-    st.divider()
 
 
 def render_sidebar(mode: str):
     with st.sidebar:
-        st.header("About")
+        st.markdown("### About")
         st.markdown(
             """
-            Common use cases:
-            - Vendor transition CRF comparison
-            - Protocol amendment impact review
-            - Legacy study CRF reuse assessment
-            - Cross-study harmonization checks
-            - CDASH standards alignment review
+            An AI-powered tool for automated CRF gap analysis, built around
+            four common clinical data management scenarios:
 
-            Try it with real public oncology CRFs from NCI's
-            Human Cancer Models Initiative (HCMI) — Lung Cancer
-            Enrollment vs Follow-Up forms are preloaded as an example.
+            **Legacy portfolio review** — assess whether historical CRFs
+            can be reused for a new study.
+
+            **Vendor transition comparison** — catch gaps when a CRF is
+            rebuilt by a new EDC vendor.
+
+            **Protocol amendment impact** — check whether a CRF still
+            captures what an amended protocol requires.
+
+            **Cross-study harmonization** — find naming and structure
+            inconsistencies across a program's CRFs before pooling data.
+
+            **CDASH alignment** — check a CRF against the official
+            CDASHIG v2.3 standard, domain by domain.
             """
+        )
+        st.divider()
+        st.caption(
+            "Try it with real public oncology CRFs from NCI's Human Cancer "
+            "Models Initiative (HCMI) — Lung Cancer Enrollment vs Follow-Up "
+            "forms work well as a first example."
         )
         if mode == MODE_CDASH:
             st.divider()
@@ -322,6 +456,7 @@ def parse_uploaded_pdf(uploaded_file):
 
 
 def main():
+    inject_custom_css()
     render_header()
 
     mode = st.radio("Analysis mode:", [MODE_PAIRWISE, MODE_PORTFOLIO, MODE_CDASH, MODE_PROTOCOL], horizontal=True)
