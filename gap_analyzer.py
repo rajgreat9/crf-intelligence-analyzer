@@ -128,6 +128,53 @@ Respond ONLY with valid JSON, no preamble, no markdown fences:
 """
 
 
+PROTOCOL_SYSTEM_PROMPT = """You are a clinical data management expert specializing in protocol-to-CRF alignment review for clinical trials, with deep expertise in oncology trial design, endpoints, and Schedule of Assessments (SoA) structures.
+
+Your task is to compare a clinical trial PROTOCOL document against a CRF document, the way an experienced clinical data manager would during CRF design review or study startup — checking whether the CRF actually captures what the protocol requires.
+
+First, identify from the protocol:
+- Primary and secondary endpoints
+- Key safety assessments and their required frequency/timing
+- Schedule of Assessments (SoA) entries — what is assessed at which visits
+- Any explicitly named data collection requirements (e.g., specific biomarkers, specific response criteria like RECIST/iRECIST, specific lab panels)
+
+Then assess whether the CRF has corresponding fields to capture each of these. For each protocol requirement, determine whether the CRF:
+- Clearly captures it (aligned)
+- Appears to partially or ambiguously capture it (flag for review)
+- Does not appear to capture it at all (gap — this is the most important finding type)
+
+Also note any CRF fields that don't seem to trace back to any protocol requirement — these may be reasonable operational fields, but are worth flagging for completeness review.
+
+For each finding, classify severity as:
+- CRITICAL: The CRF appears to be missing a field needed to capture a primary or secondary endpoint, or a required safety assessment explicitly specified in the protocol.
+- HIGH: The CRF appears to be missing a field for a protocol-specified assessment that is not a primary/secondary endpoint but is still explicitly required (e.g., a named biomarker panel, a specific SoA timepoint).
+- MODERATE: Ambiguous alignment, minor SoA timing mismatches, or CRF fields with no clear protocol traceability.
+
+Be conservative — protocols are long and CRFs may reasonably summarize or restructure protocol language. Only flag genuine apparent gaps, not just differences in wording.
+
+Respond ONLY with valid JSON, no preamble, no markdown fences:
+
+{
+  "summary": {
+    "endpoints_identified": <int>,
+    "total_findings": <int>,
+    "critical_count": <int>,
+    "high_count": <int>,
+    "moderate_count": <int>
+  },
+  "findings": [
+    {
+      "severity": "critical|high|moderate",
+      "protocol_requirement": "<the endpoint, assessment, or SoA item this finding relates to>",
+      "finding_type": "missing_endpoint_field|missing_safety_assessment|soa_timing_mismatch|unmapped_crf_field|other",
+      "description": "<what the protocol requires vs. what the CRF appears to capture>",
+      "clinical_rationale": "<why this matters for endpoint derivation, safety monitoring, or data completeness>"
+    }
+  ]
+}
+"""
+
+
 def build_user_prompt(doc_a_name: str, doc_a_content: str, doc_b_name: str, doc_b_content: str) -> str:
     return f"""Compare the following two CRF documents and produce a gap analysis.
 
@@ -169,6 +216,22 @@ CRF DOCUMENT: {doc_name}
 ---
 
 Produce the structured JSON CDASH alignment report as instructed."""
+
+
+def build_protocol_prompt(protocol_name: str, protocol_content: str, crf_name: str, crf_content: str) -> str:
+    return f"""Compare the following clinical trial protocol against the CRF document and assess whether the CRF captures what the protocol requires.
+
+PROTOCOL DOCUMENT: {protocol_name}
+{protocol_content}
+
+---
+
+CRF DOCUMENT: {crf_name}
+{crf_content}
+
+---
+
+Produce the structured JSON protocol alignment report as instructed."""
 
 
 def _call_claude(system_prompt: str, user_prompt: str, api_key: str) -> dict:
@@ -217,3 +280,28 @@ def run_cdash_analysis(doc_name: str, doc_content: str, cdash_reference_text: st
     """
     user_prompt = build_cdash_prompt(doc_name, doc_content, cdash_reference_text)
     return _call_claude(CDASH_SYSTEM_PROMPT, user_prompt, api_key)
+
+
+def run_protocol_analysis(protocol_name: str, protocol_content: str, crf_name: str, crf_content: str, api_key: str, progress_callback=None) -> dict:
+    """
+    Checks whether a CRF captures what a protocol requires (endpoints,
+    safety assessments, Schedule of Assessments items). For large
+    documents, condenses via chunked LLM extraction first so the full
+    document is read even though only a distilled version reaches the
+    final analysis call.
+    """
+    from doc_condenser import condense_document
+
+    protocol_final, protocol_condensed, _ = condense_document(
+        protocol_content, "protocol", api_key,
+        progress_callback=lambda i, n: progress_callback("protocol", i, n) if progress_callback else None,
+    )
+    crf_final, crf_condensed, _ = condense_document(
+        crf_content, "crf", api_key,
+        progress_callback=lambda i, n: progress_callback("crf", i, n) if progress_callback else None,
+    )
+
+    user_prompt = build_protocol_prompt(protocol_name, protocol_final, crf_name, crf_final)
+    result = _call_claude(PROTOCOL_SYSTEM_PROMPT, user_prompt, api_key)
+    result["_condensation_info"] = {"protocol_condensed": protocol_condensed, "crf_condensed": crf_condensed}
+    return result

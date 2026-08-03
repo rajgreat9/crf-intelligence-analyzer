@@ -8,7 +8,7 @@ import os
 from datetime import datetime
 
 from pdf_parser import parse_crf_pdf, forms_to_summary_text
-from gap_analyzer import run_gap_analysis, run_portfolio_analysis, run_cdash_analysis
+from gap_analyzer import run_gap_analysis, run_portfolio_analysis, run_cdash_analysis, run_protocol_analysis
 from usage_limiter import get_usage_today, get_daily_limit, is_limit_reached, increment_usage
 from cdash_reference import list_available_domains, domains_to_reference_text, custom_reference_to_text, CDASH_VERSION_LABEL
 
@@ -19,6 +19,7 @@ SEVERITY_ICONS = {"critical": "\U0001F534", "high": "\U0001F7E0", "moderate": "\
 MODE_PAIRWISE = "Pairwise Comparison (2 documents)"
 MODE_PORTFOLIO = "Portfolio Scan (3+ documents)"
 MODE_CDASH = "CDASH Alignment Check"
+MODE_PROTOCOL = "Protocol Alignment Check"
 
 
 def get_api_key() -> str:
@@ -163,6 +164,37 @@ def render_cdash_findings(report: dict):
             st.markdown(f"**Why it matters:** {finding.get('clinical_rationale', '')}")
 
 
+def render_protocol_findings(report: dict):
+    summary = report.get("summary", {})
+    findings = report.get("findings", [])
+
+    st.caption(f"Endpoints/requirements identified from protocol: {summary.get('endpoints_identified', '-')}")
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total Findings", summary.get("total_findings", len(findings)))
+    col2.metric("\U0001F534 Critical", summary.get("critical_count", 0))
+    col3.metric("\U0001F7E0 High", summary.get("high_count", 0))
+    col4.metric("\U0001F7E1 Moderate", summary.get("moderate_count", 0))
+    st.divider()
+
+    severity_order = {"critical": 0, "high": 1, "moderate": 2}
+    sorted_findings = sorted(findings, key=lambda f: severity_order.get(f.get("severity", "moderate"), 3))
+
+    selected_filter = st.radio("Filter by severity:", ["All", "Critical", "High", "Moderate"], horizontal=True, key="protocol_filter")
+
+    for finding in sorted_findings:
+        sev = finding.get("severity", "moderate")
+        if selected_filter != "All" and sev != selected_filter.lower():
+            continue
+        with st.container(border=True):
+            icon = SEVERITY_ICONS.get(sev, "\u26AA")
+            req = finding.get("protocol_requirement", "Unspecified requirement")
+            st.markdown(f"{icon} **{sev.upper()}** &mdash; **{req}**")
+            st.markdown(f"**Type:** {finding.get('finding_type', 'other').replace('_', ' ').title()}")
+            st.markdown(f"**Finding:** {finding.get('description', '')}")
+            st.markdown(f"**Why it matters:** {finding.get('clinical_rationale', '')}")
+
+
 def pairwise_report_to_markdown(report: dict, doc_a_name: str, doc_b_name: str) -> str:
     summary = report.get("summary", {})
     findings = report.get("findings", [])
@@ -249,6 +281,34 @@ def cdash_report_to_markdown(report: dict, doc_name: str, domains: list) -> str:
     return "\n".join(lines)
 
 
+def protocol_report_to_markdown(report: dict, protocol_name: str, crf_name: str) -> str:
+    summary = report.get("summary", {})
+    findings = report.get("findings", [])
+    lines = [
+        "# Protocol Alignment Report", "",
+        f"**Protocol:** {protocol_name}  ",
+        f"**CRF:** {crf_name}  ",
+        f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M')}  ", "",
+        "## Summary", "",
+        f"- Endpoints/requirements identified: {summary.get('endpoints_identified', '-')}",
+        f"- Total findings: {summary.get('total_findings', len(findings))}",
+        f"- Critical: {summary.get('critical_count', 0)}",
+        f"- High: {summary.get('high_count', 0)}",
+        f"- Moderate: {summary.get('moderate_count', 0)}", "",
+        "## Findings", "",
+    ]
+    severity_order = {"critical": 0, "high": 1, "moderate": 2}
+    sorted_findings = sorted(findings, key=lambda f: severity_order.get(f.get("severity", "moderate"), 3))
+    for i, f in enumerate(sorted_findings, 1):
+        lines += [
+            f"### {i}. [{f.get('severity', 'moderate').upper()}] {f.get('protocol_requirement', 'Unspecified')}", "",
+            f"**Type:** {f.get('finding_type', 'other').replace('_', ' ').title()}", "",
+            f"**Finding:** {f.get('description', '')}", "",
+            f"**Why it matters:** {f.get('clinical_rationale', '')}", "", "---", "",
+        ]
+    return "\n".join(lines)
+
+
 def parse_uploaded_pdf(uploaded_file):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         tmp.write(uploaded_file.read())
@@ -264,7 +324,7 @@ def parse_uploaded_pdf(uploaded_file):
 def main():
     render_header()
 
-    mode = st.radio("Analysis mode:", [MODE_PAIRWISE, MODE_PORTFOLIO, MODE_CDASH], horizontal=True)
+    mode = st.radio("Analysis mode:", [MODE_PAIRWISE, MODE_PORTFOLIO, MODE_CDASH, MODE_PROTOCOL], horizontal=True)
 
     render_sidebar(mode)
 
@@ -391,7 +451,7 @@ def main():
             with st.expander("View raw JSON output"):
                 st.json(st.session_state["last_report"])
 
-    else:  # MODE_CDASH
+    elif mode == MODE_CDASH:
         st.subheader("Upload one CRF document to check against CDASH")
         file_c = st.file_uploader("Upload CRF PDF", type=["pdf"], key="file_cdash")
 
@@ -400,8 +460,8 @@ def main():
         ref_source = st.radio(
             "Which CDASH reference should be used?",
             [
-                "Use bundled reference domains (AE, CM, VS, DM, RS, LB)",
-                "Upload my own CDASH reference (e.g., a specific version, or official CDASHIG extract)",
+                "Use built-in CDASHIG v2.3 reference (all 42 official domains)",
+                "Upload my own CDASH reference (e.g., a different version, or internal standard)",
             ],
             key="cdash_ref_source",
         )
@@ -489,6 +549,89 @@ def main():
             st.download_button(
                 "\U0001F4E5 Download Report (Markdown)", data=md_report,
                 file_name=f"crf_cdash_report_{datetime.now().strftime('%Y%m%d_%H%M')}.md", mime="text/markdown",
+            )
+            with st.expander("View raw JSON output"):
+                st.json(st.session_state["last_report"])
+
+    else:  # MODE_PROTOCOL
+        st.subheader("Upload a protocol and a CRF to check alignment")
+        st.caption(
+            "Upload the full protocol PDF and the CRF you want to check against it. "
+            "Large documents (100+ pages) are automatically read in full and condensed "
+            "to the clinically relevant content before analysis — this takes longer but "
+            "covers the entire document, not just the beginning."
+        )
+        col_p, col_r = st.columns(2)
+        with col_p:
+            st.markdown("**Protocol document**")
+            file_protocol = st.file_uploader("Upload protocol PDF", type=["pdf"], key="file_protocol")
+        with col_r:
+            st.markdown("**CRF document**")
+            file_crf = st.file_uploader("Upload CRF PDF", type=["pdf"], key="file_protocol_crf")
+
+        run_button = st.button(
+            "\U0001F50D Run Protocol Alignment Check",
+            type="primary",
+            disabled=not (file_protocol and file_crf) or limit_reached,
+        )
+
+        if run_button and file_protocol and file_crf and not is_limit_reached():
+            with st.spinner("Parsing protocol and CRF documents... this may take a moment for long protocols"):
+                _, protocol_content = parse_uploaded_pdf(file_protocol)
+                forms_crf, crf_content = parse_uploaded_pdf(file_crf)
+
+            st.success(f"Parsed protocol ({len(protocol_content)} chars) and CRF ({len(forms_crf)} form section(s)).")
+
+            progress_placeholder = st.empty()
+
+            def show_progress(doc_type, i, n):
+                label = "protocol" if doc_type == "protocol" else "CRF"
+                progress_placeholder.info(f"Reading {label} document — section {i} of {n}...")
+
+            with st.spinner("Identifying endpoints and checking CRF alignment..."):
+                try:
+                    report = run_protocol_analysis(
+                        file_protocol.name, protocol_content, file_crf.name, crf_content, api_key,
+                        progress_callback=show_progress,
+                    )
+                    increment_usage()
+                except Exception as e:
+                    st.error(f"Analysis failed: {e}")
+                    st.stop()
+
+            progress_placeholder.empty()
+
+            st.session_state["last_report"] = report
+            st.session_state["last_mode"] = "protocol"
+            st.session_state["last_protocol_name"] = file_protocol.name
+            st.session_state["last_protocol_crf_name"] = file_crf.name
+
+        if "last_report" in st.session_state and st.session_state.get("last_mode") == "protocol":
+            st.divider()
+            st.header("\U0001F4CB Protocol Alignment Results")
+
+            condensation_info = st.session_state["last_report"].get("_condensation_info", {})
+            if condensation_info.get("protocol_condensed") or condensation_info.get("crf_condensed"):
+                parts = []
+                if condensation_info.get("protocol_condensed"):
+                    parts.append("protocol")
+                if condensation_info.get("crf_condensed"):
+                    parts.append("CRF")
+                st.caption(
+                    f"ℹ️ The {' and '.join(parts)} document was large and was read in full, "
+                    "then condensed to clinically relevant content before analysis."
+                )
+
+            render_protocol_findings(st.session_state["last_report"])
+            st.divider()
+            md_report = protocol_report_to_markdown(
+                st.session_state["last_report"],
+                st.session_state["last_protocol_name"],
+                st.session_state["last_protocol_crf_name"],
+            )
+            st.download_button(
+                "\U0001F4E5 Download Report (Markdown)", data=md_report,
+                file_name=f"crf_protocol_report_{datetime.now().strftime('%Y%m%d_%H%M')}.md", mime="text/markdown",
             )
             with st.expander("View raw JSON output"):
                 st.json(st.session_state["last_report"])
