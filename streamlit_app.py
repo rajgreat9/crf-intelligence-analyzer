@@ -59,10 +59,9 @@ def render_sidebar(mode: str):
             st.divider()
             st.caption(f"CDASH reference: {CDASH_VERSION_LABEL}")
             st.caption(
-                "This reference is reconstructed from publicly available CDISC "
-                "documentation, not the official gated CDASHIG Metadata Table. "
-                "Treat findings as directional, not a substitute for verification "
-                "against a licensed copy of the official standard."
+                "This reference is extracted directly from the official "
+                "CDASHIG v2.3 Metadata Table published by CDISC — the "
+                "authoritative standard, not a reconstruction."
             )
         st.divider()
         used = get_usage_today()
@@ -418,13 +417,13 @@ def main():
             selected_labels = st.multiselect(
                 "CDASH domains to check against:",
                 domain_labels,
-                default=domain_labels[:2] if len(domain_labels) >= 2 else domain_labels,
+                default=[l for l in domain_labels if l.startswith(("AE ", "RS ", "TU "))] or domain_labels[:2],
             )
             selected_codes = [label.split(" — ")[0] for label in selected_labels]
             st.caption(
-                "Reference source: publicly-sourced CDASH reconstruction (see sidebar for details). "
-                "CDASH revises periodically — if you have a specific version you need to check "
-                "against, use the upload option above instead."
+                "Reference source: official CDASHIG v2.3 Metadata Table. "
+                "CDASH revises periodically — if you need to check against a "
+                "different version, use the upload option above instead."
             )
         else:
             custom_ref_file = st.file_uploader(
